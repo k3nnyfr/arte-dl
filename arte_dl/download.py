@@ -14,7 +14,7 @@ from pathlib import Path
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import ISO639Utils
 
-from .arte_api import Episode, Series
+from .arte_api import Episode, Movie, Series
 from .config import Config
 from .selection import Selection, select
 from .subtitles import vtt_to_srt
@@ -47,18 +47,35 @@ class EpisodeNumbers:
 _EMPTY_GROUP_RE = re.compile(r'\s*[(\[{]\s*(?:[a-z]+-)?\s*[)\]}]')
 
 
-def destination(series: Series, ep: Episode, cfg: Config) -> Path:
+def _render(templates: list[str], fields: dict) -> list[str]:
+    try:
+        return [_EMPTY_GROUP_RE.sub('', tpl.format(**fields)).strip() for tpl in templates]
+    except (KeyError, ValueError, AttributeError) as e:
+        raise DownloadError(f'Invalid output template: {e!r}') from None
+
+
+def destination(item: Series | Movie, ep: Episode, cfg: Config) -> Path:
+    if isinstance(item, Movie):
+        return movie_destination(item, ep, cfg)
+    series = item
     fields = {'series': sanitize(ep.series), 'year': series.year or '',
               'tmdb_id': series.tmdb_id or '', 'tvdb_id': series.tvdb_id or '',
               'season': ep.season, 'episode': EpisodeNumbers(ep.numbers),
               'title': sanitize(ep.title), 'id': ep.id}
-    try:
-        parts = [_EMPTY_GROUP_RE.sub('', tpl.format(**fields)).strip() for tpl in (
-            cfg.output.series_dir, cfg.output.season_dir, cfg.output.filename)]
-    except (KeyError, ValueError, AttributeError) as e:
-        raise DownloadError(f'Invalid output template: {e!r}') from None
-    series_dir, season_dir, filename = parts
+    series_dir, season_dir, filename = _render(
+        [cfg.output.series_dir, cfg.output.season_dir, cfg.output.filename], fields)
     return cfg.output_dir / series_dir / season_dir / f'{filename}.mkv'
+
+
+def movie_destination(movie: Movie, part: Episode, cfg: Config) -> Path:
+    o = cfg.output
+    fields = {'title': sanitize(movie.title), 'year': movie.year or '',
+              'original_title': sanitize(movie.original_title or movie.title),
+              'tmdb_id': movie.tmdb_id or '', 'imdb_id': movie.imdb_id or '', 'id': movie.id,
+              'part': part.number}
+    filename_tpl = o.movie_filename + (o.part_suffix if movie.multipart else '')
+    movie_dir, filename = _render([o.movie_dir, filename_tpl], fields)
+    return cfg.movie_root(movie.kind) / movie_dir / f'{filename}.mkv'
 
 
 def _ydl_params(**extra) -> dict:
@@ -93,7 +110,7 @@ def _lang3(lang: str | None) -> str:
     return (lang and ISO639Utils.short2long(lang)) or 'und'
 
 
-def download(series: Series, ep: Episode, info: dict, sel: Selection, dest: Path, cfg: Config) -> None:
+def download(item: Series | Movie, ep: Episode, info: dict, sel: Selection, dest: Path, cfg: Config) -> None:
     work = cfg.output_dir / '.arte-dl-tmp' / ep.id
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -129,7 +146,7 @@ def download(series: Series, ep: Episode, info: dict, sel: Selection, dest: Path
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(dest.stem + '.part.mkv')
-    subprocess.run(_mux_command(media, sub_files, series, ep, sel, part), check=True)
+    subprocess.run(_mux_command(media, sub_files, item, ep, sel, part), check=True)
     part.replace(dest)
     shutil.rmtree(work, ignore_errors=True)
     try:
@@ -138,7 +155,37 @@ def download(series: Series, ep: Episode, info: dict, sel: Selection, dest: Path
         pass
 
 
-def _mux_command(media: Path, subs: list[Path], series: Series, ep: Episode, sel: Selection,
+def _tags(item: Series | Movie, ep: Episode) -> dict[str, str]:
+    if isinstance(item, Movie):
+        title = item.title
+        if item.multipart:
+            title += f' ({ep.number}/{item.total_parts})'
+            if ep.title != item.title:
+                title += f' - {ep.title}'
+        return {
+            'title': title,
+            'part_number': str(ep.number) if item.multipart else '',
+            'total_parts': str(item.total_parts) if item.multipart else '',
+            'description': (ep.description if item.multipart else None) or item.description or '',
+            'comment': ep.url,
+            'tmdb': f'{item.tmdb_type}/{item.tmdb_id}' if item.tmdb_id else '',
+            'imdb': item.imdb_id or '',
+            'date': str(item.year or ''),
+        }
+    return {
+        'title': ep.title,
+        'show': ep.series,
+        'season_number': str(ep.season),
+        'episode_sort': str(ep.number),
+        'episode_id': ep.label,
+        'description': ep.description or '',
+        'comment': ep.url,
+        'tmdb': f'tv/{item.tmdb_id}' if item.tmdb_id else '',
+        'date': str(item.year or ''),
+    }
+
+
+def _mux_command(media: Path, subs: list[Path], item: Series | Movie, ep: Episode, sel: Selection,
                  out: Path) -> list[str]:
     cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', str(media)]
     for path in subs:
@@ -148,18 +195,7 @@ def _mux_command(media: Path, subs: list[Path], series: Series, ep: Episode, sel
         cmd += ['-map', f'{i + 1}:0']
     cmd += ['-c', 'copy', '-c:s', 'srt', '-map_metadata', '-1']
 
-    tags = {
-        'title': ep.title,
-        'show': ep.series,
-        'season_number': str(ep.season),
-        'episode_sort': str(ep.number),
-        'episode_id': ep.label,
-        'description': ep.description or '',
-        'comment': ep.url,
-        'tmdb': f'tv/{series.tmdb_id}' if series.tmdb_id else '',
-        'date': str(series.year or ''),
-    }
-    for k, v in tags.items():
+    for k, v in _tags(item, ep).items():
         if v:
             cmd += ['-metadata', f'{k}={v}']
 

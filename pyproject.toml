@@ -1,7 +1,7 @@
 [project]
 name = "arte-dl"
 version = "0.1.0"
-description = "Download whole arte.tv series with yt-dlp into a tidy Series/Season XX/ tree of MKV files"
+description = "Download arte.tv series, films and documentaries with yt-dlp into a tidy Plex / Jellyfin tree of MKV files"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

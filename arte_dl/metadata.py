@@ -4,6 +4,9 @@ Arte's numbering doesn't always follow the reference one: e.g. from season 6,
 "Meurtres à Sandhamn" episodes are 88 min on Arte but two 45 min episodes on
 TMDB, so Arte's S06E01 becomes S06E01-E02 (multi-episode file, understood by
 Plex and Jellyfin).
+
+Films and documentaries are matched against TMDB movies (documentaries also
+against TV shows, where TMDB often files multi-part ones).
 """
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 
-from .arte_api import Episode, Series
+from .arte_api import Episode, Movie, Series
 from .config import MetadataConfig
 
 API = 'https://api.themoviedb.org/3'
@@ -75,16 +78,19 @@ class TMDBClient:
         raise AssertionError('unreachable')
 
     @lru_cache(maxsize=None)
-    def search(self, query: str, language: str) -> tuple[dict, ...]:
-        data = self._get('/search/tv', query=query, language=language, include_adult='false')
+    def search(self, query: str, language: str, kind: str = 'tv') -> tuple[dict, ...]:
+        data = self._get(f'/search/{kind}', query=query, language=language, include_adult='false')
         return tuple((data or {}).get('results') or ())
 
     @lru_cache(maxsize=None)
-    def show(self, show_id: int) -> dict:
-        data = self._get(f'/tv/{show_id}', append_to_response='external_ids,translations')
+    def details(self, kind: str, tmdb_id: int) -> dict:
+        data = self._get(f'/{kind}/{tmdb_id}', append_to_response='external_ids,translations')
         if not data:
-            raise TMDBError(f'Unknown TMDB show {show_id}')
+            raise TMDBError(f'Unknown TMDB {kind} {tmdb_id}')
         return data
+
+    def show(self, show_id: int) -> dict:
+        return self.details('tv', show_id)
 
     @lru_cache(maxsize=None)
     def season(self, show_id: int, number: int, language: str) -> dict | None:
@@ -98,14 +104,15 @@ def _ids_path() -> Path:
     return Path(base) / 'arte-dl' / 'tmdb-ids.json'
 
 
-def load_ids() -> dict[str, int]:
+def load_ids() -> dict[str, int | str]:
+    """Arte id -> TMDB show id, or "movie/ID" / "tv/ID" for films and documentaries."""
     try:
         return json.loads(_ids_path().read_text())
     except (FileNotFoundError, ValueError):
         return {}
 
 
-def save_id(arte_id: str, tmdb_id: int) -> None:
+def save_id(arte_id: str, tmdb_id: int | str) -> None:
     ids = load_ids()
     if ids.get(arte_id) == tmdb_id:
         return
@@ -127,12 +134,21 @@ def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, normalize(a), normalize(b)).ratio()
 
 
-def score_candidate(series: Series, queries: list[str], result: dict) -> tuple[float, float]:
+def _name(result: dict) -> str | None:
+    return result.get('name') or result.get('title')  # TV show / movie
+
+
+def _date(result: dict) -> str:
+    return result.get('first_air_date') or result.get('release_date') or ''
+
+
+def score_candidate(series: Series | Movie, queries: list[str], result: dict) -> tuple[float, float]:
     """Returns (score, name similarity)."""
     sim = max((_similarity(q, name) for q in queries
-               for name in (result.get('name'), result.get('original_name')) if name), default=0)
+               for name in (_name(result), result.get('original_name') or result.get('original_title'))
+               if name), default=0)
     score = sim
-    year = (result.get('first_air_date') or '')[:4]
+    year = _date(result)[:4]
     if series.year and year.isdigit():
         diff = abs(int(year) - series.year)
         score += 0.2 if diff == 0 else 0.1 if diff == 1 else -0.5 if diff > 2 else 0
@@ -141,29 +157,46 @@ def score_candidate(series: Series, queries: list[str], result: dict) -> tuple[f
     return score, sim
 
 
-def find_show(client: TMDBClient, series: Series, language: str) -> tuple[int | None, str]:
-    """Search TMDB for the series. Returns (id or None, explanation)."""
-    queries = list(dict.fromkeys(q for q in (series.original_title, series.title) if q))
+def _queries(item: Series | Movie) -> list[str]:
+    queries = list(dict.fromkeys(q for q in (item.original_title, item.title) if q))
     # "The Hack : sur écoute" -> also try "The Hack"
     queries += [q.split(' : ')[0] for q in queries if ' : ' in q and q.split(' : ')[0] not in queries]
-    candidates = {}
-    for q in queries:
-        for r in client.search(q, language)[:10]:
-            candidates[r['id']] = r
-    scored = sorted(((score_candidate(series, queries, r), r) for r in candidates.values()),
+    return queries
+
+
+def _pick(item: Series | Movie, queries: list[str],
+          candidates: dict) -> tuple[object | None, str]:
+    """Best of {key: result}, or None with an explanation when unsure."""
+    scored = sorted(((score_candidate(item, queries, r), key, r) for key, r in candidates.items()),
                     key=lambda x: x[0][0], reverse=True)
     if not scored:
         return None, f'no TMDB result for {queries}'
 
     def describe(r):
-        return f'{r.get("name")} ({(r.get("first_air_date") or "?")[:4]}) id={r["id"]}'
+        return f'{_name(r)} ({(_date(r) or "?")[:4]}) id={r["id"]}'
 
-    (score, sim), best = scored[0]
+    (score, sim), key, best = scored[0]
     if sim < 0.8 or score < 0.95:
         return None, f'no confident match (best: {describe(best)}, score {score:.2f})'
     if len(scored) > 1 and scored[1][0][0] > score - 0.05:
-        return None, f'ambiguous: {describe(best)} / {describe(scored[1][1])}'
-    return best['id'], f'matched {describe(best)}'
+        return None, f'ambiguous: {describe(best)} / {describe(scored[1][2])}'
+    return key, f'matched {describe(best)}'
+
+
+def find_show(client: TMDBClient, series: Series, language: str) -> tuple[int | None, str]:
+    """Search TMDB for the series. Returns (id or None, explanation)."""
+    queries = _queries(series)
+    candidates = {r['id']: r for q in queries for r in client.search(q, language)[:10]}
+    return _pick(series, queries, candidates)
+
+
+def find_movie(client: TMDBClient, movie: Movie, language: str,
+               kinds: tuple[str, ...] = ('movie',)) -> tuple[tuple[str, int] | None, str]:
+    """Search TMDB for a film / documentary. Returns ((kind, id) or None, explanation)."""
+    queries = _queries(movie)
+    candidates = {(kind, r['id']): r for kind in kinds for q in queries
+                  for r in client.search(q, language, kind)[:10]}
+    return _pick(movie, queries, candidates)
 
 
 # --- episode alignment -------------------------------------------------------------
@@ -241,6 +274,31 @@ class Metadata:
     def show_id(self) -> int:
         return self.show['id']
 
+    def translated(self, lang: str, key: str) -> str | None:
+        """Show / movie `key` ("name", "title", "overview") in a TMDB language."""
+        translations = (self.show.get('translations') or {}).get('translations') or []
+        iso, _, region = lang.partition('-')
+        return next((t['data'].get(key) for t in translations if t.get('iso_639_1') == iso
+                     and (not region or t.get('iso_3166_1') == region) and t['data'].get(key)), None)
+
+    def movie_texts(self, arte_title: str, arte_description: str | None) -> tuple[str, str | None]:
+        """(title, synopsis) of a movie (or TV show) following the language priority."""
+        key = 'title' if 'title' in self.show else 'name'
+        original = self.show.get(f'original_{key}')
+        title = overview = None
+        for lang in self.languages:
+            if lang == 'arte':
+                t, o = arte_title, arte_description
+            elif lang == 'original':
+                t, o = original, self.translated(self.tmdb_language(lang), 'overview')
+            else:
+                # Untranslated: TMDB (and Plex / Jellyfin) show the original title in that language
+                t, o = self.translated(lang, key) or original, self.translated(lang, 'overview')
+            title, overview = title or t, overview or o
+            if title and overview:
+                break
+        return title or arte_title, overview or arte_description
+
     def tmdb_language(self, lang: str) -> str:
         return (self.show.get('original_language') or 'en') if lang == 'original' else lang
 
@@ -292,7 +350,8 @@ def apply(series: Series, cfg: MetadataConfig, forced_id: int | None = None,
     client = TMDBClient(cfg.key)
     first_lang = next((l for l in cfg.languages if l not in ('arte', 'original')), 'en-US')
 
-    show_id = forced_id or load_ids().get(series.id)
+    remembered = load_ids().get(series.id)
+    show_id = forced_id or (remembered if isinstance(remembered, int) else None)
     if show_id:
         how = 'forced' if forced_id else 'remembered'
     else:
@@ -328,3 +387,44 @@ def apply(series: Series, cfg: MetadataConfig, forced_id: int | None = None,
             nums = mapping[ep.id]
             ep.number, ep.last_number = nums[0], (nums[-1] if len(nums) > 1 else None)
             meta.localize(ep)
+
+
+def parse_ref(ref: int | str | None, default_kind: str = 'movie') -> tuple[str, int] | None:
+    """123, "123", "movie/123", "tv/123" -> (kind, id)."""
+    if ref is None:
+        return None
+    kind, _, num = str(ref).rpartition('/')
+    return kind or default_kind, int(num)
+
+
+def apply_movie(movie: Movie, cfg: MetadataConfig, forced: str | None = None, log=print) -> None:
+    """Title, year and synopsis of a film / documentary from TMDB. Keeps Arte data when unsure."""
+    client = TMDBClient(cfg.key)
+    first_lang = next((l for l in cfg.languages if l not in ('arte', 'original')), 'en-US')
+    # A documentary may be filed on TMDB as a movie or as a TV (mini-)series
+    kinds = ('movie', 'tv') if movie.kind == 'documentary' else ('movie',)
+
+    # An int remembered for a documentary comes from a run as a series (--as-series)
+    ref = parse_ref(forced) or parse_ref(load_ids().get(movie.id), 'tv')
+    if ref:
+        how = 'forced' if forced else 'remembered'
+    else:
+        ref, how = find_movie(client, movie, first_lang, kinds)
+        if not ref:
+            log(f'   TMDB: {how} — keeping Arte metadata (use --tmdb-id to set it)')
+            return
+    kind, tmdb_id = ref
+    details = client.details(kind, tmdb_id)
+    save_id(movie.id, f'{kind}/{tmdb_id}')
+
+    meta = Metadata(client, details, cfg.languages)
+    movie.tmdb_id, movie.tmdb_type = tmdb_id, kind
+    movie.imdb_id = (details.get('external_ids') or {}).get('imdb_id') or details.get('imdb_id')
+    date = _date(details)
+    movie.year = int(date[:4]) if date[:4].isdigit() else movie.year
+    movie.title, movie.description = meta.movie_texts(movie.title, movie.description)
+    for part in movie.parts:
+        part.series = movie.title
+        if not movie.multipart:
+            part.title = movie.title
+    log(f'   TMDB: {how} — "{movie.title}" ({movie.year}) https://www.themoviedb.org/{kind}/{tmdb_id}')

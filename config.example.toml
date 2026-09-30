@@ -2,8 +2,12 @@
 # Toutes les options sont facultatives ; les valeurs ci-dessous sont les valeurs par défaut.
 
 [output]
-# Racine de la vidéothèque (~ et $VARIABLES acceptés)
+# Racine de la vidéothèque des séries (~ et $VARIABLES acceptés)
 directory = "."
+# Racines des films et des documentaires ; vide : `directory` (documentaires : `movies_directory`)
+# -o / --output remplace ces trois racines par une seule.
+movies_directory = ""
+documentaries_directory = ""
 # Champs disponibles : {series} {year} {tmdb_id} {tvdb_id} {season} {episode} {title} {id}
 # Un groupe vide (année ou id inconnus) est retiré : "Série ()" -> "Série".
 # Pour forcer l'identification par Jellyfin : "{series} ({year}) [tmdbid-{tmdb_id}]"
@@ -11,6 +15,13 @@ series_dir = "{series} ({year})"
 season_dir = "Season {season:02d}"
 # {episode:02d} donne "01", ou "01-E02" pour un fichier qui contient deux épisodes TMDB
 filename = "{series} - S{season:02d}E{episode:02d} - {title}"
+# Films et documentaires. Champs : {title} {year} {original_title} {tmdb_id} {imdb_id} {id}
+# Pour Jellyfin : "{title} ({year}) [tmdbid-{tmdb_id}]", pour Plex : "{title} ({year}) {{tmdb-{tmdb_id}}}"
+movie_dir = "{title} ({year})"
+movie_filename = "{title} ({year})"
+# Ajouté au nom d'un documentaire en plusieurs parties ({part} : numéro de la partie) ;
+# "part1", "part2"… est reconnu par Plex et Jellyfin, qui les enchaînent comme un seul film.
+part_suffix = " - part{part}"
 
 [video]
 # Hauteur maximale (216, 360, 432, 720, 1080)
@@ -41,7 +52,7 @@ provider = "tmdb"
 # Clé API TMDB (v3) ou jeton d'accès en lecture (v4). La variable d'environnement
 # TMDB_API_KEY fonctionne aussi. Sans clé : données Arte uniquement.
 api_key = ""
-# Ordre de priorité pour le nom de la série, les titres et les résumés d'épisodes.
+# Ordre de priorité pour le nom de la série, les titres (épisodes, films) et les résumés.
 #   "fr-FR", "en-US", "de"… -> langue TMDB
 #   "arte"                  -> titres / résumés Arte
 #   "original"              -> langue originale de la série

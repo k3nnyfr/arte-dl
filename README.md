@@ -1,8 +1,9 @@
 # arte-dl
 
 Wrapper autour de [yt-dlp](https://github.com/yt-dlp/yt-dlp) pour télécharger une série
-arte.tv complète (toutes ses saisons) en MKV, selon des préférences de qualité, de pistes
-audio et de sous-titres, et la ranger dans une arborescence de vidéothèque (Plex / Jellyfin / Kodi) :
+arte.tv complète (toutes ses saisons), un film ou un documentaire en MKV, selon des préférences
+de qualité, de pistes audio et de sous-titres, et les ranger dans une arborescence de
+vidéothèque (Plex / Jellyfin / Kodi) :
 
 ```
 Meurtres à Sandhamn (2010)/
@@ -11,6 +12,15 @@ Meurtres à Sandhamn (2010)/
 │   └── …
 └── Season 06/
     └── Meurtres à Sandhamn - S06E01-E02 - Le prix à payer.mkv
+
+Films/
+└── Le Parrain (1972)/
+    └── Le Parrain (1972).mkv
+
+Documentaires/
+└── L'empire LVMH (2026)/
+    ├── L'empire LVMH (2026) - part1.mkv
+    └── L'empire LVMH (2026) - part2.mkv
 ```
 
 Avec une clé [TMDB](https://www.themoviedb.org/), le nom de la série, l'année, la numérotation
@@ -44,10 +54,18 @@ arte-dl -s 1,3-5 -e 1-2 -o ~/Vidéos/Séries https://www.arte.tv/fr/videos/RC-02
 
 # Corriger l'identification TMDB (mémorisée pour les fois suivantes)
 arte-dl --list --tmdb-id 55270 https://www.arte.tv/fr/videos/RC-022391/meurtres-a-sandhamn/
+
+# Un film, une trilogie, un documentaire en deux parties
+arte-dl https://www.arte.tv/fr/videos/051404-000-A/les-vieux-espions-vous-saluent-bien/
+arte-dl https://www.arte.tv/fr/videos/RC-028368/le-parrain-la-trilogie/
+arte-dl https://www.arte.tv/fr/videos/RC-028069/l-empire-lvmh/
+
+# Le même documentaire rangé comme une mini-série (Season 01/…S01E01…)
+arte-dl --as-series https://www.arte.tv/fr/videos/RC-028069/l-empire-lvmh/
 ```
 
 `-s` / `-e` portent sur la numérotation finale (celle de TMDB quand elle est utilisée),
-celle qu'affiche `--list`.
+celle qu'affiche `--list`. Pour un documentaire en plusieurs parties, `-e` choisit les parties.
 
 Types d'URL acceptés :
 
@@ -56,6 +74,10 @@ Types d'URL acceptés :
 | série `…/videos/RC-xxxxxx/…`          | toutes les saisons disponibles      |
 | saison `…/videos/RC-xxxxxx/…`         | cette saison                        |
 | épisode `…/videos/059534-001-A/…`     | cet épisode, bien numéroté/rangé    |
+| film `…/videos/051404-000-A/…`        | ce film                             |
+| documentaire `…/videos/RC-xxxxxx/…`   | toutes ses parties (1/2, 2/2…)      |
+| partie `…/videos/122704-002-A/…`      | cette partie du documentaire        |
+| collection `…/videos/RC-xxxxxx/…` (trilogie, cycle) | chacun de ses films / documentaires |
 
 Les fichiers déjà présents sont ignorés (`--force` pour les retélécharger) : relancer la
 commande reprend simplement là où elle s'était arrêtée, ou récupère les nouveaux épisodes.
@@ -68,6 +90,8 @@ Voir [`config.example.toml`](config.example.toml) pour toutes les options. Exemp
 ```toml
 [output]
 directory = "~/Vidéos/Séries"
+movies_directory = "~/Vidéos/Films"
+documentaries_directory = "~/Vidéos/Documentaires"
 
 [video]
 max_height = 1080
@@ -107,10 +131,31 @@ comme le jeton d'accès en lecture (v4) conviennent.
   (ou seulement « Épisode 3 ») passe à la suivante. Pour deux épisodes fusionnés,
   « X (part 1) » + « X (part 2) » donnent « X ».
 
+- **Films et documentaires** : recherche parmi les films TMDB (et aussi les séries pour un
+  documentaire, que TMDB range souvent en mini-série) par titre original, titre Arte, année et
+  langue, avec les mêmes garde-fous. Le titre et le résumé suivent `languages` ; `--tmdb-id`
+  accepte `238` (film) ou `tv/12345` (documentaire rangé en série sur TMDB).
+
+## Films et documentaires
+
+Arte indique le genre de chaque programme :
+
+- **film** (genre « Cinéma », y compris les téléfilms) : `Titre (année)/Titre (année).mkv`
+  dans `movies_directory`. Les collections thématiques auxquelles il appartient (« Comédie »,
+  « Cinéma sous haute tension »…) sont ignorées ; l'URL d'une telle collection (ex. *Le parrain -
+  La trilogie*) télécharge chacun de ses films ;
+- **documentaire unitaire** : même rangement, dans `documentaries_directory` ;
+- **documentaire en plusieurs parties** (mini-série documentaire Arte, « (1/2) », « (2/2) ») :
+  un film en parties, `Titre (année) - part1.mkv`, `- part2.mkv`, que Plex et Jellyfin
+  enchaînent. Le titre propre à chaque partie est gardé dans les tags du fichier.
+  `--as-series` le range plutôt comme une série (`Season 01`, `S01E01`).
+
+Les autres programmes sans série (concert, spectacle…) sont rangés comme des films.
+
 ## Fonctionnement
 
-1. **Structure** : la série, ses saisons et épisodes sont lus via l'API Arte (celle
-   qu'utilise yt-dlp). Le numéro de saison vient du titre (« Saison 4 »), le numéro d'épisode
+1. **Structure** : la série, ses saisons et épisodes (ou le film, les parties du documentaire)
+   sont lus via l'API Arte (celle qu'utilise yt-dlp). Le numéro de saison vient du titre (« Saison 4 »), le numéro d'épisode
    du « (1/3) », le titre de l'épisode du sous-titre Arte (à défaut « Épisode N »), puis
    tout cela est corrigé par TMDB si une clé est configurée.
 2. **Sélection** : pour chaque épisode, yt-dlp extrait les formats ; arte-dl choisit la vidéo
@@ -120,7 +165,7 @@ comme le jeton d'accès en lecture (v4) conviennent.
 3. **Téléchargement** : yt-dlp télécharge et fusionne vidéo + audios, et récupère les
    sous-titres WebVTT.
 4. **Remux final** (ffmpeg) : sous-titres convertis en SRT, langue et titre de chaque piste,
-   pistes par défaut / forcées / SDH, tags série / saison / épisode. Le fichier est écrit en
+   pistes par défaut / forcées / SDH, tags série / saison / épisode (ou titre, partie, TMDB / IMDb). Le fichier est écrit en
    `.part.mkv` puis renommé, donc un fichier `.mkv` présent est toujours complet.
 
 La conversion VTT → SRT est faite en Python : les VTT d'Arte (fins de ligne CRLF) donnent

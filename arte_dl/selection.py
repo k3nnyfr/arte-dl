@@ -123,7 +123,10 @@ def pick_video(formats: list[dict], cfg: Config) -> dict:
     if not videos:
         raise SelectionError('No video format found')
     capped = [f for f in videos if not cfg.video.max_height or f['height'] <= cfg.video.max_height]
-    return max(capped or videos, key=lambda f: (
+    if not capped:  # nothing that small: the lowest height available
+        lowest = min(f['height'] for f in videos)
+        capped = [f for f in videos if f['height'] == lowest]
+    return max(capped, key=lambda f: (
         f['height'], _codec_rank(f.get('vcodec'), cfg.video.codecs), f.get('tbr') or 0))
 
 

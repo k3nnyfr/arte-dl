@@ -94,3 +94,9 @@ def test_invalid_audio_spec():
     cfg.audio.tracks = ['fr-xyz']
     with pytest.raises(SelectionError):
         select(INFO, cfg)
+
+
+def test_max_height_below_every_format_takes_the_lowest():
+    cfg = Config()
+    cfg.video.max_height = 144
+    assert select(INFO, cfg).video['format_id'] == 'VF-STF-427'

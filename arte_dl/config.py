@@ -23,6 +23,13 @@ class OutputConfig:
     series_dir: str = '{series} ({year})'
     season_dir: str = 'Season {season:02d}'
     filename: str = '{series} - S{season:02d}E{episode:02d} - {title}'
+    # Roots for films and documentaries; empty: `directory` (documentaries: `movies_directory`)
+    movies_directory: str = ''
+    documentaries_directory: str = ''
+    movie_dir: str = '{title} ({year})'
+    movie_filename: str = '{title} ({year})'
+    # Appended to movie_filename for a documentary in several parts ("part1": Plex and Jellyfin)
+    part_suffix: str = ' - part{part}'
 
 
 @dataclass
@@ -75,7 +82,17 @@ class Config:
 
     @property
     def output_dir(self) -> Path:
-        return Path(os.path.expandvars(self.output.directory)).expanduser()
+        return _expand(self.output.directory)
+
+    def movie_root(self, kind: str) -> Path:
+        """Root directory for a "film" or a "documentary"."""
+        o = self.output
+        path = (o.documentaries_directory if kind == 'documentary' else '') or o.movies_directory
+        return _expand(path) if path else self.output_dir
+
+
+def _expand(path: str) -> Path:
+    return Path(os.path.expandvars(path)).expanduser()
 
 
 def default_config_path() -> Path:
