@@ -1,0 +1,49 @@
+# arte-dl — copier dans ~/.config/arte-dl/config.toml (ou passer avec -c)
+# Toutes les options sont facultatives ; les valeurs ci-dessous sont les valeurs par défaut.
+
+[output]
+# Racine de la vidéothèque (~ et $VARIABLES acceptés)
+directory = "."
+# Champs disponibles : {series} {year} {tmdb_id} {tvdb_id} {season} {episode} {title} {id}
+# Un groupe vide (année ou id inconnus) est retiré : "Série ()" -> "Série".
+# Pour forcer l'identification par Jellyfin : "{series} ({year}) [tmdbid-{tmdb_id}]"
+series_dir = "{series} ({year})"
+season_dir = "Season {season:02d}"
+# {episode:02d} donne "01", ou "01-E02" pour un fichier qui contient deux épisodes TMDB
+filename = "{series} - S{season:02d}E{episode:02d} - {title}"
+
+[video]
+# Hauteur maximale (216, 360, 432, 720, 1080)
+max_height = 1080
+# Codec préféré à hauteur égale : "hevc" (H.265, meilleur débit chez Arte) ou "avc" (H.264, plus compatible)
+codecs = ["hevc", "avc"]
+
+[audio]
+# Pistes à inclure, dans l'ordre ; la première trouvée est la piste par défaut.
+#   "original"   -> version originale (VO), quelle que soit sa langue
+#   "fr", "de"…  -> piste dans cette langue (hors audiodescription / confort audio)
+#   "fr-ad"      -> audiodescription
+#   "fr-comfort" -> « confort audio » (dialogues renforcés)
+# Si la VO est en français, "original" et "fr" désignent la même piste : elle n'est incluse qu'une fois.
+tracks = ["original", "fr"]
+
+[subtitles]
+# "fr" -> sous-titres complets, "fr-forced" -> forcés (passages en langue étrangère), "fr-acc" -> sourds et malentendants
+tracks = ["fr", "fr-forced"]
+# Piste de sous-titres par défaut : une clé de `tracks`, "none" ou "auto"
+# ("auto" : forcés si la piste audio par défaut est dans la langue des sous-titres, complets sinon)
+default = "auto"
+
+[metadata]
+# "tmdb" : nom de série, année, numérotation et titres d'épisodes depuis themoviedb.org
+# "none" : uniquement les données Arte
+provider = "tmdb"
+# Clé API TMDB (v3) ou jeton d'accès en lecture (v4). La variable d'environnement
+# TMDB_API_KEY fonctionne aussi. Sans clé : données Arte uniquement.
+api_key = ""
+# Ordre de priorité pour le nom de la série, les titres et les résumés d'épisodes.
+#   "fr-FR", "en-US", "de"… -> langue TMDB
+#   "arte"                  -> titres / résumés Arte
+#   "original"              -> langue originale de la série
+# Une langue sans titre (ou avec un titre générique « Épisode 3 ») passe à la suivante.
+languages = ["fr-FR", "arte", "en-US"]
