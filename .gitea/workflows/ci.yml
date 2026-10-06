@@ -27,7 +27,7 @@ jobs:
         # refs/pull/N/head, qu'un « clone --branch » ne sait pas récupérer.
         run: |
           git init -q .
-          git remote add origin "$(echo "$SERVER_URL" | sed "s|https://|https://oauth2:${TOKEN}@|")/${REPO}.git"
+          git remote add origin "$(echo "$SERVER_URL" | sed -E "s|^(https?://)|\1oauth2:${TOKEN}@|")/${REPO}.git"
           git fetch -q --depth 1 origin "$REF"
           git checkout -q FETCH_HEAD
 
