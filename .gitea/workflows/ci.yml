@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+jobs:
+  ci:
+    name: test
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.13-alpine
+
+    steps:
+      - name: Install tools
+        run: apk add --no-cache git
+
+      - name: Checkout
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        # Ref complète plutôt que nom de branche : sur une pull request, c'est
+        # refs/pull/N/head, qu'un « clone --branch » ne sait pas récupérer.
+        run: |
+          git init -q .
+          git remote add origin "$(echo "$SERVER_URL" | sed "s|https://|https://oauth2:${TOKEN}@|")/${REPO}.git"
+          git fetch -q --depth 1 origin "$REF"
+          git checkout -q FETCH_HEAD
+
+      - name: install
+        run: pip install --quiet --root-user-action=ignore '.[dev]'
+
+      - name: test
+        run: python -m pytest -q
